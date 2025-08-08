@@ -1,39 +1,79 @@
-# upload_to_dropbox.py
 import os
-import glob
+import tarfile
 import dropbox
-from pathlib import Path
+import shutil
 
-TOKEN = os.getenv("DROPBOX_ACCESS")
-if not TOKEN:
-    print("ERROR: DROPBOX_ACCESS not found in env.")
-    raise SystemExit(1)
+# ✅ CHANGE THIS TO YOUR PUSHED FILE NAME (if you want fixed file)
+# If you want to auto-detect any pushed file, leave it as None
+FIXED_FILE_NAME = None  # Example: "splunklab-PROD.tar.gz"
 
-dbx = dropbox.Dropbox(TOKEN)
-print("Connected to Dropbox account.")
+# Dropbox settings
+DROPBOX_MASTER_PATH = "/Bots_V3_splunkapps.tar"
+TEMP_DIR = "temp_extract"
 
-# find all .tar.gz files in repo (recursive)
-tar_files = [p for p in glob.glob("**/*.tar.gz", recursive=True)]
+def convert_to_tgz(input_file):
+    """Convert .tar.gz → .tgz"""
+    base_name = os.path.splitext(os.path.splitext(input_file)[0])[0]
+    output_file = f"{base_name}.tgz"
+    with tarfile.open(input_file, "r:gz") as tar:
+        with tarfile.open(output_file, "w:gz") as out_tar:
+            for member in tar.getmembers():
+                f = tar.extractfile(member)
+                if f:
+                    out_tar.addfile(member, f)
+    print(f"Converted {input_file} → {output_file}")
+    return output_file
 
-if not tar_files:
-    print("No .tar.gz files found. Exiting.")
-    raise SystemExit(0)
+def main():
+    # 1️⃣ Detect pushed file
+    pushed_files = []
+    for root, _, files in os.walk("."):
+        for file in files:
+            if file.endswith((".tar.gz", ".tgz")) and file != "Bots_V3_splunkapps.tar":
+                pushed_files.append(os.path.join(root, file))
 
-for f in tar_files:
-    p = Path(f)
-    if p.name.endswith(".tar.gz"):
-        new_name = p.with_name(p.name[:-7] + ".tgz")  # convert name to .tgz
-        # Rename in runner workspace (this does not change your GitHub repo)
-        p.rename(new_name)
-        print(f"Converted: {p} -> {new_name}")
+    if not pushed_files:
+        print("No .tar.gz or .tgz file found.")
+        return
 
-        # Upload to Dropbox into folder /splunk_apps/ (create if not exists)
-        dropbox_path = f"/splunk_apps/{new_name.name}"
-        with open(new_name, "rb") as fh:
-            data = fh.read()
-        try:
-            dbx.files_upload(data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-            print(f"Uploaded {new_name.name} to Dropbox at {dropbox_path}")
-        except dropbox.exceptions.ApiError as e:
-            print("Dropbox API error:", e)
-            raise
+    if FIXED_FILE_NAME:
+        new_file_path = [f for f in pushed_files if FIXED_FILE_NAME in f][0]
+    else:
+        new_file_path = pushed_files[0]
+
+    # 2️⃣ Convert if .tar.gz
+    if new_file_path.endswith(".tar.gz"):
+        new_file_path = convert_to_tgz(new_file_path)
+
+    new_file_name = os.path.basename(new_file_path)
+
+    # 3️⃣ Connect to Dropbox
+    dbx = dropbox.Dropbox(os.environ["DROPBOX_TOKEN"])
+
+    # 4️⃣ Download master TAR
+    print("Downloading master TAR from Dropbox...")
+    with open("Bots_V3_splunkapps.tar", "wb") as f:
+        metadata, res = dbx.files_download(DROPBOX_MASTER_PATH)
+        f.write(res.content)
+
+    # 5️⃣ Extract master TAR
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    with tarfile.open("Bots_V3_splunkapps.tar", "r") as tar:
+        tar.extractall(TEMP_DIR)
+
+    # 6️⃣ Replace/Add new file
+    target_path = os.path.join(TEMP_DIR, new_file_name)
+    shutil.copy(new_file_path, target_path)
+    print(f"Added/Replaced {new_file_name} in master TAR.")
+
+    # 7️⃣ Repack TAR
+    with tarfile.open("Bots_V3_splunkapps.tar", "w") as tar:
+        tar.add(TEMP_DIR, arcname="")
+
+    # 8️⃣ Upload back to Dropbox
+    with open("Bots_V3_splunkapps.tar", "rb") as f:
+        dbx.files_upload(f.read(), DROPBOX_MASTER_PATH, mode=dropbox.files.WriteMode.overwrite)
+    print("Uploaded updated TAR to Dropbox.")
+
+if __name__ == "__main__":
+    main()
