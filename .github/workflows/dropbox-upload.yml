@@ -1,4 +1,4 @@
-uname: Upload to Dropbox
+name: Upload to Dropbox
 
 on:
   push:
