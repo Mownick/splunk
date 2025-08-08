@@ -23,6 +23,6 @@ def upload_file(file_path):
     print(f"✅ Uploaded {file_path} to Dropbox")
 
 if __name__ == "__main__":
-    file_to_upload = find_file()
+    file_to_upload = find_file(.tar.gz)
     print(f"Found file: {file_to_upload}")
     upload_file(file_to_upload)
