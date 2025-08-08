@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: '3.x'
 
-    - name: Run requirements.txt
+    - name: Install dependencies
       run: pip install dropbox
 
     - name: Run Python Script
