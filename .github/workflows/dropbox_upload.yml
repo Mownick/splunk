@@ -1,1 +1,27 @@
 
+name: Upload to Dropbox
+
+on:
+  push:
+    paths:
+      - '**.tar.gz'
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Convert .tar.gz to .tgz
+        run: |
+          for file in *.tar.gz; do
+            mv "$file" "${file%.tar.gz}.tgz"
+          done
+
+      - name: Upload to Dropbox
+        uses: tsickert/dropbox-upload@v1.3.3
+        with:
+          dropbox_token: ${{ secrets.DROPBOX_TOKEN }}
+          src: "*.tgz"
+          dest: "/Bots_V3_splunkapps.tar"
