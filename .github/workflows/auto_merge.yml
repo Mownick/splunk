@@ -18,9 +18,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Dropbox SDK
-        run: pip install dropbox
-
+    
       - name: Run merge script
         env:
           DROPBOX_TOKEN: ${{ secrets.DROPBOX_TOKEN }}
