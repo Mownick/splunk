@@ -1,4 +1,4 @@
-name: Upload to Dropbox
+uname: Upload to Dropbox
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: '3.x'
 
-    - name: Install Dropbox SDK
+    - name: requirements.txt
       run: pip install dropbox
 
     - name: Run Python Script
