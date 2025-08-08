@@ -1,0 +1,28 @@
+name: Upload to Dropbox
+
+on:
+  push:
+    paths:
+      - "*.tar.gz"
+      - "*.tgz"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install Dropbox SDK
+      run: pip install dropbox
+
+    - name: Run Python Script
+      run: python upload_to_dropbox.py
+      env:
+        DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
