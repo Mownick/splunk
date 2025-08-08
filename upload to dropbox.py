@@ -16,7 +16,7 @@ def find_file():
     return max(files, key=os.path.getmtime)
 
 def upload_file(file_path):
-    dbx = dropbox.Dropbox(ACCESS_TOKEN)
+    dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
     with open(file_path, "rb") as f:
         dbx.files_upload(f.read(), f"/{os.path.basename(file_path)}",
                          mode=dropbox.files.WriteMode.overwrite)
