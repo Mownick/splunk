@@ -1,5 +1,4 @@
-
-name: GitHub Dropbox Auto-App Merge
+name: GitHub → Dropbox Auto-App Merge
 
 on:
   push:
@@ -19,8 +18,8 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install Dropbox SDK
+        run: pip install dropbox
 
       - name: Run merge script
         env:
