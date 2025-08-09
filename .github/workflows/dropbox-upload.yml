@@ -5,11 +5,11 @@ on:
     branches: [ main ]
     paths:
       - '*.tar.gz'
+      - "*.tgz"
   workflow_dispatch:
 
 jobs:
   backup:
-   Upload:
     runs-on: ubuntu-latest
     
     steps:
