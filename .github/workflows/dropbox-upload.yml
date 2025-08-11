@@ -6,7 +6,6 @@ on:
     paths:
       - '*.tar.gz'
       - '*.tgz'
-      - '*.tar'  # Add this line to watch for .tar files
   workflow_dispatch:
 
 jobs:
@@ -27,9 +26,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install dropbox requests
         
-    - name: List files (debug)
-      run: ls -la
-      
     - name: Run update script
       run: python upload_to_dropbox.py
       env:
@@ -40,4 +36,8 @@ jobs:
         echo "Checking results..."
         if [ -f upload.log ]; then
           cat upload.log
+        fi
+        if [ $? -ne 0 ]; then
+          echo "Upload failed"
+          exit 1
         fi
