@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '*.tar.gz'  # Watch for .tar.gz files
+      - '*.tar.gz'
   workflow_dispatch:
 
 jobs:
@@ -12,19 +12,32 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repo
+    - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Python
+    - name: Set up Python 3.10
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
         
     - name: Install dependencies
       run: |
-        pip install dropbox
+        python -m pip install --upgrade pip
+        pip install dropbox==12.0.2 requests ply urllib3 six idna charset-normalizer certifi stone
         
+    - name: List files (debug)
+      run: ls -la
+      
     - name: Run upload script
-      run: python upload_script.py
+      run: |
+        python -c "import dropbox; print(dropbox.__version__)"
+        python upload_script.py
       env:
         DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+        
+    - name: Verify upload
+      run: |
+        echo "Checking results..."
+        if [ -f upload.log ]; then
+          cat upload.log
+        fi
