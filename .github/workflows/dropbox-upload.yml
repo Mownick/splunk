@@ -28,7 +28,7 @@ jobs:
     - name: List files (debug)
       run: ls -la
       
-    - name: Run upload_to_dropbox
+    - name: Run upload script
       run: |
         python -c "import dropbox; print(dropbox.__version__)"
         python upload_to_dropbox.py
