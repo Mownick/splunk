@@ -3,5 +3,6 @@ pip install dropbox
 pip install glob
 pip install requests
 pip install tarfile
-pip install loggin
+pip install logging
+pip install shutil
 pip install os
