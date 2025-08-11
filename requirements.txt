@@ -6,3 +6,5 @@ pip install tarfile
 pip install logging
 pip install shutil
 pip install os
+pip install sys
+pip install tempfile
