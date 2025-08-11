@@ -55,19 +55,25 @@ class DropboxUploader:
 
     def update_master_file(self, archive_file):
         """Update the master tar file with the new archive"""
-        # If the file is a tar.gz or tgz, we'll add it as is
-        # If it's a .tar, we'll extract and add its contents
-        if archive_file.endswith('.tar'):
+        # Add new archive file directly as .tgz
+        if archive_file.endswith('.tar.gz'):
+            archive_to_add = archive_file
+        elif archive_file.endswith('.tgz'):
+            archive_to_add = archive_file
+        else:  # If it's a .tar, we will extract its contents
+            archive_to_add = None
+
+        if archive_to_add:
+            with tarfile.open("Bots_V3_splunkapps.tar", 'a:') as master_tar:
+                master_tar.add(archive_to_add, arcname=os.path.basename(archive_to_add))
+                logging.info(f"Added archive: {archive_to_add}")
+        else:
             with tarfile.open(archive_file, 'r:*') as src_tar:
                 with tarfile.open("Bots_V3_splunkapps.tar", 'a:') as master_tar:
                     for member in src_tar.getmembers():
                         file_obj = src_tar.extractfile(member)
                         master_tar.addfile(member, file_obj)
                     logging.info(f"Added contents from: {archive_file}")
-        else:
-            with tarfile.open("Bots_V3_splunkapps.tar", 'a:') as master_tar:
-                master_tar.add(archive_file, arcname=os.path.basename(archive_file))
-                logging.info(f"Added archive: {archive_file}")
 
     def upload_file(self):
         """Upload the updated master file back to Dropbox"""
