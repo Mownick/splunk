@@ -30,9 +30,9 @@ class DropboxUploader:
 
     def find_latest_tar_gz(self):
         """Find most recent .tar.gz file in current directory"""
-        files = glob.glob("*.tar.gz")
+        files = glob.glob("*.tar.gz") + glob.glob("*.tgz")
         if not files:
-            raise FileNotFoundError("No .tar.gz files found")
+            raise FileNotFoundError("No .tar.gz or .tgz files found")
         latest = max(files, key=os.path.getmtime)
         logging.info(f"Found file: {latest}")
         return latest
@@ -52,6 +52,23 @@ class DropboxUploader:
                     tar_out.addfile(member, tar_in.extractfile(member))
         logging.info(f"Converted to: {output_path}")
         return output_path
+
+    def download_master_file(self, dropbox_path):
+        """Download the existing master file from Dropbox"""
+        try:
+            with open("Bots_V3_splunkapps.tar", "wb") as f:
+                metadata, res = self.dbx.files_download(dropbox_path)
+                f.write(res.content)
+            logging.info(f"Downloaded master file: {dropbox_path}")
+        except ApiError as e:
+            logging.error(f"Failed to download file: {e}")
+            raise
+
+    def replace_or_add_app(self, tgz_file):
+        """Replace or add the .tgz file in the master tar file"""
+        with tarfile.open("Bots_V3_splunkapps.tar", "a:gz") as master_tar:
+            master_tar.add(tgz_file, arcname=os.path.basename(tgz_file))
+            logging.info(f"Added or replaced: {tgz_file} in master tar")
 
     def upload_file(self, local_path, dropbox_path):
         """Upload file with chunked upload for large files"""
@@ -110,12 +127,18 @@ if __name__ == "__main__":
         # Step 1: Find file
         tar_file = uploader.find_latest_tar_gz()
         
-        # Step 2: Convert format
+        # Step 2: Convert format if necessary
         tgz_file = uploader.convert_to_tgz(tar_file)
         
-        # Step 3: Upload
-        dropbox_path = f"/Splunk_Backups/{os.path.basename(tgz_file)}"  # Change this path
-        success = uploader.upload_file(tgz_file, dropbox_path)
+        # Step 3: Download existing master file from Dropbox
+        dropbox_path = "/Splunk_Backups/Bots_V3_splunkapps.tar"
+        uploader.download_master_file(dropbox_path)
+        
+        # Step 4: Replace or add the new .tgz file
+        uploader.replace_or_add_app(tgz_file)
+        
+        # Step 5: Upload updated master file back to Dropbox
+        success = uploader.upload_file("Bots_V3_splunkapps.tar", dropbox_path)
         
         if not success:
             raise RuntimeError("Upload failed")
