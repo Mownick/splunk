@@ -28,10 +28,10 @@ jobs:
     - name: List files (debug)
       run: ls -la
       
-    - name: Run upload script
+    - name: Run upload_to_dropbox
       run: |
         python -c "import dropbox; print(dropbox.__version__)"
-        python upload_script.py
+        python upload_tp_dropbox.py
       env:
         DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
         
