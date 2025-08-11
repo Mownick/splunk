@@ -8,7 +8,8 @@ from dropbox.exceptions import ApiError, AuthError
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='upload.log'
 )
 
 class DropboxUploader:
@@ -28,51 +29,51 @@ class DropboxUploader:
             logging.error(f"Connection failed: {str(e)}")
             raise
 
-    def find_latest_tar_gz(self):
-        """Find most recent .tar.gz file in current directory"""
-        files = glob.glob("*.tar.gz") + glob.glob("*.tgz")
+    def find_latest_archive(self):
+        """Find most recent archive file in current directory"""
+        files = glob.glob("*.tar.gz") + glob.glob("*.tgz") + glob.glob("*.tar")
         if not files:
-            raise FileNotFoundError("No .tar.gz or .tgz files found")
+            raise FileNotFoundError("No archive files found (*.tar.gz, *.tgz, *.tar)")
         latest = max(files, key=os.path.getmtime)
         logging.info(f"Found file: {latest}")
         return latest
 
-    def convert_to_tgz(self, input_path):
-        """Convert .tar.gz to .tgz format"""
-        output_path = input_path.replace('.tar.gz', '.tgz')
-        
-        # Skip conversion if file already exists
-        if os.path.exists(output_path):
-            logging.info(f"TGZ file already exists: {output_path}")
-            return output_path
-            
-        with tarfile.open(input_path, 'r:gz') as tar_in:
-            with tarfile.open(output_path, 'w:gz') as tar_out:
-                for member in tar_in.getmembers():
-                    tar_out.addfile(member, tar_in.extractfile(member))
-        logging.info(f"Converted to: {output_path}")
-        return output_path
-
-    def download_master_file(self, dropbox_path):
+    def download_master_file(self):
         """Download the existing master file from Dropbox"""
         try:
             with open("Bots_V3_splunkapps.tar", "wb") as f:
-                metadata, res = self.dbx.files_download(dropbox_path)
+                metadata, res = self.dbx.files_download("/Bots_V3_splunkapps.tar")
                 f.write(res.content)
-            logging.info(f"Downloaded master file: {dropbox_path}")
+            logging.info("Downloaded master file: Bots_V3_splunkapps.tar")
         except ApiError as e:
+            if e.error.is_path() and e.error.get_path().is_not_found():
+                logging.info("Master file doesn't exist yet, will create new one")
+                return False
             logging.error(f"Failed to download file: {e}")
             raise
+        return True
 
-    def replace_or_add_app(self, tgz_file):
-        """Replace or add the .tgz file in the master tar file"""
-        with tarfile.open("Bots_V3_splunkapps.tar", "a:gz") as master_tar:
-            master_tar.add(tgz_file, arcname=os.path.basename(tgz_file))
-            logging.info(f"Added or replaced: {tgz_file} in master tar")
+    def update_master_file(self, archive_file):
+        """Update the master tar file with the new archive"""
+        # If the file is a tar.gz or tgz, we'll add it as is
+        # If it's a .tar, we'll extract and add its contents
+        if archive_file.endswith('.tar'):
+            with tarfile.open(archive_file, 'r:*') as src_tar:
+                with tarfile.open("Bots_V3_splunkapps.tar", 'a:') as master_tar:
+                    for member in src_tar.getmembers():
+                        file_obj = src_tar.extractfile(member)
+                        master_tar.addfile(member, file_obj)
+                    logging.info(f"Added contents from: {archive_file}")
+        else:
+            with tarfile.open("Bots_V3_splunkapps.tar", 'a:') as master_tar:
+                master_tar.add(archive_file, arcname=os.path.basename(archive_file))
+                logging.info(f"Added archive: {archive_file}")
 
-    def upload_file(self, local_path, dropbox_path):
-        """Upload file with chunked upload for large files"""
+    def upload_file(self):
+        """Upload the updated master file back to Dropbox"""
         CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks
+        local_path = "Bots_V3_splunkapps.tar"
+        dropbox_path = "/Bots_V3_splunkapps.tar"
         
         try:
             file_size = os.path.getsize(local_path)
@@ -106,7 +107,7 @@ class DropboxUploader:
                         )
                     )
             
-            logging.info(f"Successfully uploaded to: {dropbox_path}")
+            logging.info(f"Successfully uploaded updated master file")
             return True
             
         except ApiError as e:
@@ -124,21 +125,17 @@ if __name__ == "__main__":
 
         uploader = DropboxUploader(ACCESS_TOKEN)
         
-        # Step 1: Find file
-        tar_file = uploader.find_latest_tar_gz()
+        # Step 1: Find the latest archive file
+        archive_file = uploader.find_latest_archive()
         
-        # Step 2: Convert format if necessary
-        tgz_file = uploader.convert_to_tgz(tar_file)
+        # Step 2: Download existing master file (if it exists)
+        uploader.download_master_file()
         
-        # Step 3: Download existing master file from Dropbox
-        dropbox_path = "/Splunk_Backups/Bots_V3_splunkapps.tar"
-        uploader.download_master_file(dropbox_path)
+        # Step 3: Update the master file with the new archive
+        uploader.update_master_file(archive_file)
         
-        # Step 4: Replace or add the new .tgz file
-        uploader.replace_or_add_app(tgz_file)
-        
-        # Step 5: Upload updated master file back to Dropbox
-        success = uploader.upload_file("Bots_V3_splunkapps.tar", dropbox_path)
+        # Step 4: Upload the updated master file back to Dropbox
+        success = uploader.upload_file()
         
         if not success:
             raise RuntimeError("Upload failed")
