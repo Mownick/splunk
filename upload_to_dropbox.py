@@ -1,196 +1,134 @@
 import os
-import glob
-import tarfile
-import logging
-import tempfile
 import sys
+import tarfile
+import tempfile
 import dropbox
-from dropbox.exceptions import ApiError, AuthError
+from dropbox.exceptions import AuthError, ApiError
+from pathlib import Path
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='upload.log'
-)
+# Configuration
+DROPBOX_FILE_PATH = '/Bots_V3_splunkapps.tar'
+TEMP_DIR = tempfile.gettempdir()
+MASTER_TAR_NAME = 'Bots_V3_splunkapps.tar'
 
-MASTER_NAME = "Bots_V3_splunkapps.tgz"  # Changed from .tar to .tgz for consistency
-MASTER_PATH = os.path.abspath(MASTER_NAME)
-
-class DropboxUploader:
-    def __init__(self, access_token):
-        self.dbx = dropbox.Dropbox(access_token)
-        self._verify_token()
-
-    def _verify_token(self):
-        try:
-            account = self.dbx.users_get_current_account()
-            logging.info(f"Connected to Dropbox as: {account.name.display_name}")
-        except AuthError:
-            logging.error("Invalid access token or missing permissions")
-            raise
-        except Exception as e:
-            logging.error(f"Connection failed: {str(e)}")
-            raise
-
-    def find_latest_archive(self):
-        """Find most recent .tar.gz or .tgz in cwd, excluding master tar itself."""
-        patterns = ["*.tar.gz", "*.tgz"]
-        files = []
-        for p in patterns:
-            files.extend(glob.glob(p))
-        # Exclude master file and this script itself
-        files = [f for f in files if os.path.abspath(f) != MASTER_PATH and os.path.basename(f) != os.path.basename(__file__)]
-        if not files:
-            raise FileNotFoundError("No archive files found (*.tar.gz, *.tgz)")
-        latest = max(files, key=os.path.getmtime)
-        logging.info(f"Found file: {latest}")
-        return latest
-
-    def download_master_file(self):
-        """Download existing master file from Dropbox if present."""
-        try:
-            metadata, res = self.dbx.files_download(f"/{MASTER_NAME}")
-            with open(MASTER_NAME, "wb") as f:
-                f.write(res.content)
-            logging.info("Downloaded master file from Dropbox.")
-            return True
-        except ApiError as e:
-            # check not_found
-            try:
-                if e.error.is_path() and e.error.get_path().is_not_found():
-                    logging.info("Master file not found on Dropbox; will create new one locally.")
-                    return False
-            except Exception:
-                pass
-            logging.error(f"Failed to download master file: {e}")
-            raise
-        except Exception as e:
-            logging.error(f"Unexpected error while downloading master file: {e}")
-            raise
-
-    def _make_arcname(self, archive_file):
-        """Return desired arcname inside master tar: convert .tar.gz -> .tgz"""
-        base = os.path.basename(archive_file)
-        if base.endswith(".tar.gz"):
-            return base[:-7] + ".tgz"
-        return base
-
-    def _convert_to_tgz_if_needed(self, archive_file):
-        """Convert .tar.gz to .tgz format if needed, returns path to final file"""
-        if archive_file.endswith(".tar.gz"):
-            new_name = archive_file[:-7] + ".tgz"
-            os.rename(archive_file, new_name)
-            logging.info(f"Renamed {archive_file} to {new_name}")
-            return new_name
-        return archive_file
-
-    def update_master_file(self, archive_file):
-        """
-        Rebuild master tar so that any existing entry with the same name is replaced.
-        If master doesn't exist, create new tar and add the archive (stored as .tgz arcname).
-        """
-        # First convert the archive file to .tgz if needed
-        archive_file = self._convert_to_tgz_if_needed(archive_file)
-        arcname = self._make_arcname(archive_file)
-        logging.info(f"Desired arcname inside master: {arcname}")
-
-        if os.path.exists(MASTER_NAME):
-            # Rebuild master into a temp tar: copy all entries except ones matching arcname
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".tar")
-            os.close(tmp_fd)
-            try:
-                with tarfile.open(MASTER_NAME, 'r:') as old_tar, \
-                     tarfile.open(tmp_path, 'w:') as new_tar:
-                    for member in old_tar.getmembers():
-                        if member.name == arcname:
-                            logging.info(f"Skipping existing entry {member.name} (will be replaced).")
-                            continue
-                        fobj = old_tar.extractfile(member)
-                        if fobj is None:
-                            # directory or special file
-                            new_tar.addfile(member)
-                        else:
-                            new_tar.addfile(member, fobj)
-                    # add the new archive file as a single file entry with arcname
-                    new_tar.add(archive_file, arcname=arcname)
-                # replace original master with rebuilt one
-                os.replace(tmp_path, MASTER_NAME)
-                logging.info(f"Rebuilt {MASTER_NAME} and added {arcname}")
-            except Exception:
-                # cleanup on error
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                logging.exception("Failed while rebuilding master tar")
-                raise
-        else:
-            # Create new master and add the archive
-            try:
-                with tarfile.open(MASTER_NAME, 'w:') as master_tar:
-                    master_tar.add(archive_file, arcname=arcname)
-                logging.info(f"Created {MASTER_NAME} and added {arcname}")
-            except Exception:
-                logging.exception("Failed to create master tar")
-                raise
-
-    def upload_file(self):
-        """Upload master tar to Dropbox with chunked upload if large."""
-        CHUNK_SIZE = 8 * 1024 * 1024
-        local_path = MASTER_NAME
-        dropbox_path = f"/{MASTER_NAME}"
-
-        if not os.path.exists(local_path):
-            logging.error(f"Local master file not found: {local_path}")
-            raise FileNotFoundError(local_path)
-
-        file_size = os.path.getsize(local_path)
-        try:
-            with open(local_path, 'rb') as f:
-                if file_size <= CHUNK_SIZE:
-                    self.dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-                else:
-                    # start session
-                    upload_session_start_result = self.dbx.files_upload_session_start(f.read(CHUNK_SIZE))
-                    cursor = dropbox.files.UploadSessionCursor(session_id=upload_session_start_result.session_id, offset=f.tell())
-                    commit = dropbox.files.CommitInfo(path=dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-
-                    while f.tell() < file_size:
-                        bytes_left = file_size - f.tell()
-                        if bytes_left <= CHUNK_SIZE:
-                            self.dbx.files_upload_session_finish(f.read(CHUNK_SIZE), cursor, commit)
-                        else:
-                            self.dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
-                            cursor.offset = f.tell()
-            logging.info(f"Successfully uploaded {MASTER_NAME} to Dropbox.")
-            return True
-        except ApiError as e:
-            logging.error(f"Dropbox API error: {e}")
-            return False
-        except Exception as e:
-            logging.exception(f"Upload failed: {e}")
-            return False
-
-def main():
+def initialize_dropbox(access_token):
+    """Initialize Dropbox client with access token."""
     try:
-        ACCESS_TOKEN = os.environ.get("DROPBOX_ACCESS_TOKEN")
-        if not ACCESS_TOKEN:
-            raise ValueError("DROPBOX_ACCESS_TOKEN environment variable missing")
+        dbx = dropbox.Dropbox(access_token)
+        dbx.users_get_current_account()
+        return dbx
+    except AuthError:
+        print("ERROR: Invalid Dropbox access token")
+        sys.exit(1)
 
-        uploader = DropboxUploader(ACCESS_TOKEN)
+def download_from_dropbox(dbx):
+    """Download the master tar file from Dropbox."""
+    local_tar_path = os.path.join(TEMP_DIR, MASTER_TAR_NAME)
+    try:
+        dbx.files_download_to_file(local_tar_path, DROPBOX_FILE_PATH)
+        return local_tar_path
+    except ApiError as err:
+        if err.error.is_path() and err.error.get_path().is_not_found():
+            print("Master tar file not found in Dropbox, creating new one.")
+            return None
+        print(f"Error downloading from Dropbox: {err}")
+        sys.exit(1)
 
-        archive_file = uploader.find_latest_archive()
-        uploader.download_master_file()  # may return True/False, not used directly here
-        uploader.update_master_file(archive_file)
-        success = uploader.upload_file()
-        if not success:
-            raise RuntimeError("Upload failed")
-        logging.info("✅ Backup completed successfully")
-        print("✅ Backup completed successfully")
-        return 0
+def upload_to_dropbox(dbx, local_path):
+    """Upload file to Dropbox."""
+    try:
+        with open(local_path, 'rb') as f:
+            dbx.files_upload(f.read(), DROPBOX_FILE_PATH, mode=dropbox.files.WriteMode.overwrite)
+        print(f"Successfully uploaded {local_path} to Dropbox")
     except Exception as e:
-        logging.exception(f"❌ Backup failed: {e}")
-        print(f"❌ Backup failed: {e}", file=sys.stderr)
-        return 1
+        print(f"Error uploading to Dropbox: {e}")
+        sys.exit(1)
+
+def convert_to_tgz_if_needed(file_path):
+    """Convert .tar.gz to .tgz if needed, returns new path."""
+    if file_path.endswith('.tar.gz'):
+        new_path = file_path.replace('.tar.gz', '.tgz')
+        with tarfile.open(file_path, 'r:gz') as tar:
+            with tarfile.open(new_path, 'w:gz') as new_tar:
+                for member in tar.getmembers():
+                    file_obj = tar.extractfile(member)
+                    new_tar.addfile(member, file_obj)
+        os.remove(file_path)
+        return new_path
+    return file_path
+
+def update_master_tar(master_tar_path, new_tgz_path):
+    """Update master tar with new tgz file."""
+    new_tgz_name = os.path.basename(new_tgz_path)
+    temp_tar_path = os.path.join(TEMP_DIR, f"temp_{MASTER_TAR_NAME}")
+    
+    # Create new tar if it doesn't exist
+    if not master_tar_path:
+        with tarfile.open(temp_tar_path, 'w') as tar:
+            tar.add(new_tgz_path, arcname=new_tgz_name)
+        return temp_tar_path
+    
+    # Extract existing tar, add/replace file, then recreate
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Extract existing tar contents
+        with tarfile.open(master_tar_path, 'r') as tar:
+            tar.extractall(path=tmpdir)
+        
+        # Remove existing file if it exists
+        existing_file = os.path.join(tmpdir, new_tgz_name)
+        if os.path.exists(existing_file):
+            os.remove(existing_file)
+        
+        # Copy new file into directory
+        import shutil
+        shutil.copy(new_tgz_path, os.path.join(tmpdir, new_tgz_name))
+        
+        # Create new tar file
+        with tarfile.open(temp_tar_path, 'w') as tar:
+            for file in os.listdir(tmpdir):
+                tar.add(os.path.join(tmpdir, file), arcname=file)
+    
+    return temp_tar_path
+
+def process_files(changed_files, access_token):
+    """Main processing function."""
+    dbx = initialize_dropbox(access_token)
+    
+    for file_path in changed_files.split(','):
+        if not file_path.strip():
+            continue
+            
+        file_path = file_path.strip()
+        print(f"Processing file: {file_path}")
+        
+        # Step 1: Convert to .tgz if needed
+        processed_path = convert_to_tgz_if_needed(file_path)
+        tgz_name = os.path.basename(processed_path)
+        
+        # Step 2: Download existing master tar from Dropbox
+        master_tar_path = download_from_dropbox(dbx)
+        
+        # Step 3: Update master tar with new file
+        updated_tar_path = update_master_tar(master_tar_path, processed_path)
+        
+        # Step 4: Upload updated tar to Dropbox
+        upload_to_dropbox(dbx, updated_tar_path)
+        
+        # Cleanup
+        if master_tar_path and os.path.exists(master_tar_path):
+            os.remove(master_tar_path)
+        if os.path.exists(updated_tar_path):
+            os.remove(updated_tar_path)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if len(sys.argv) < 2:
+        print("Usage: python upload_to_dropbox.py <changed_files>")
+        sys.exit(1)
+        
+    access_token = os.getenv('DROPBOX_ACCESS_TOKEN')
+    if not access_token:
+        print("ERROR: Dropbox access token not found in environment variables")
+        sys.exit(1)
+        
+    changed_files = sys.argv[1]
+    process_files(changed_files, access_token)
