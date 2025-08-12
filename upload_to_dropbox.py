@@ -4,6 +4,7 @@ import tarfile
 import logging
 import tempfile
 import sys
+import time
 import dropbox
 from dropbox.exceptions import ApiError, AuthError
 
@@ -14,7 +15,7 @@ logging.basicConfig(
     filename='upload.log'
 )
 
-MASTER_NAME = "Bots_V3_splunkapps.tgz"  # Changed from .tar to .tgz for consistency
+MASTER_NAME = "Bots_V3_splunkapps.tgz"
 MASTER_PATH = os.path.abspath(MASTER_NAME)
 
 class DropboxUploader:
@@ -56,13 +57,9 @@ class DropboxUploader:
             logging.info("Downloaded master file from Dropbox.")
             return True
         except ApiError as e:
-            # check not_found
-            try:
-                if e.error.is_path() and e.error.get_path().is_not_found():
-                    logging.info("Master file not found on Dropbox; will create new one locally.")
-                    return False
-            except Exception:
-                pass
+            if e.error.is_path() and e.error.get_path().is_not_found():
+                logging.info("Master file not found on Dropbox; will create new one locally.")
+                return False
             logging.error(f"Failed to download master file: {e}")
             raise
         except Exception as e:
@@ -87,50 +84,54 @@ class DropboxUploader:
 
     def update_master_file(self, archive_file):
         """
-        Rebuild master tar so that any existing entry with the same name is replaced.
-        If master doesn't exist, create new tar and add the archive (stored as .tgz arcname).
+        Rebuild master tar with updated timestamps.
+        - Converts .tar.gz to .tgz
+        - Replaces existing versions
+        - Updates all timestamps to current time
         """
-        # First convert the archive file to .tgz if needed
         archive_file = self._convert_to_tgz_if_needed(archive_file)
         arcname = self._make_arcname(archive_file)
-        logging.info(f"Desired arcname inside master: {arcname}")
-
+        current_time = time.time()
+        
         if os.path.exists(MASTER_NAME):
-            # Rebuild master into a temp tar: copy all entries except ones matching arcname
             tmp_fd, tmp_path = tempfile.mkstemp(suffix=".tar")
             os.close(tmp_fd)
             try:
                 with tarfile.open(MASTER_NAME, 'r:') as old_tar, \
                      tarfile.open(tmp_path, 'w:') as new_tar:
+                    
+                    # Set modification time for the archive
+                    new_tar.mtime = current_time
+                    
                     for member in old_tar.getmembers():
                         if member.name == arcname:
-                            logging.info(f"Skipping existing entry {member.name} (will be replaced).")
+                            logging.info(f"Replacing existing {member.name}")
                             continue
                         fobj = old_tar.extractfile(member)
-                        if fobj is None:
-                            # directory or special file
-                            new_tar.addfile(member)
-                        else:
-                            new_tar.addfile(member, fobj)
-                    # add the new archive file as a single file entry with arcname
+                        new_tar.addfile(member, fobj)
+                    
+                    # Add new file with current timestamp
                     new_tar.add(archive_file, arcname=arcname)
-                # replace original master with rebuilt one
+                
+                # Replace original and update timestamps
                 os.replace(tmp_path, MASTER_NAME)
-                logging.info(f"Rebuilt {MASTER_NAME} and added {arcname}")
-            except Exception:
-                # cleanup on error
+                os.utime(MASTER_NAME, (current_time, current_time))
+                logging.info(f"Updated {MASTER_NAME} with {arcname}")
+                
+            except Exception as e:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-                logging.exception("Failed while rebuilding master tar")
+                logging.error(f"Failed to update master file: {str(e)}")
                 raise
         else:
-            # Create new master and add the archive
             try:
                 with tarfile.open(MASTER_NAME, 'w:') as master_tar:
+                    master_tar.mtime = current_time
                     master_tar.add(archive_file, arcname=arcname)
-                logging.info(f"Created {MASTER_NAME} and added {arcname}")
-            except Exception:
-                logging.exception("Failed to create master tar")
+                os.utime(MASTER_NAME, (current_time, current_time))
+                logging.info(f"Created new {MASTER_NAME} with {arcname}")
+            except Exception as e:
+                logging.error(f"Failed to create master file: {str(e)}")
                 raise
 
     def upload_file(self):
@@ -147,13 +148,22 @@ class DropboxUploader:
         try:
             with open(local_path, 'rb') as f:
                 if file_size <= CHUNK_SIZE:
-                    self.dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+                    self.dbx.files_upload(
+                        f.read(), 
+                        dropbox_path, 
+                        mode=dropbox.files.WriteMode.overwrite,
+                        client_modified=datetime.now(timezone.utc)
+                    )
                 else:
-                    # start session
                     upload_session_start_result = self.dbx.files_upload_session_start(f.read(CHUNK_SIZE))
-                    cursor = dropbox.files.UploadSessionCursor(session_id=upload_session_start_result.session_id, offset=f.tell())
-                    commit = dropbox.files.CommitInfo(path=dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-
+                    cursor = dropbox.files.UploadSessionCursor(
+                        session_id=upload_session_start_result.session_id,
+                        offset=f.tell())
+                    commit = dropbox.files.CommitInfo(
+                        path=dropbox_path,
+                        mode=dropbox.files.WriteMode.overwrite,
+                        client_modified=datetime.now(timezone.utc))
+                    
                     while f.tell() < file_size:
                         bytes_left = file_size - f.tell()
                         if bytes_left <= CHUNK_SIZE:
@@ -179,7 +189,7 @@ def main():
         uploader = DropboxUploader(ACCESS_TOKEN)
 
         archive_file = uploader.find_latest_archive()
-        uploader.download_master_file()  # may return True/False, not used directly here
+        uploader.download_master_file()
         uploader.update_master_file(archive_file)
         success = uploader.upload_file()
         if not success:
