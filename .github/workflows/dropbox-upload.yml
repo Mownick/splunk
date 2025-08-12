@@ -1,11 +1,10 @@
-name: Upload to Dropbox
+name: Upload .tgz to Master Tar
 
 on:
   push:
     branches: [ main ]
     paths:
-      - '*.tar.gz'
-      - '*.tgz'
+      - '*.tgz'  # Now only watching for .tgz files
   workflow_dispatch:
 
 jobs:
@@ -28,7 +27,7 @@ jobs:
         
     - name: Run update script
       run: |
-        echo "=== Starting Dropbox upload ==="
+        echo "=== Starting .tgz to master tar update ==="
         python upload_to_dropbox.py
       env:
         DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
