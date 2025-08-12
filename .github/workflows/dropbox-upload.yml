@@ -24,21 +24,39 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install dropbox requests
+        pip install dropbox requests tarfile
+        
+    - name: Verify archive files
+      run: |
+        echo "=== Checking for archive files ==="
+        ls -la *.tar.gz *.tgz || echo "No archive files found"
         
     - name: Run update script
       run: |
         echo "=== Starting Dropbox upload ==="
         python upload_to_dropbox.py
+        echo "=== Conversion Summary ==="
+        echo "All .tar.gz files will be stored as .tgz in the master archive"
       env:
         DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
         
-    - name: Show logs
+    - name: Show detailed logs
       if: always()
       run: |
         echo "=== Upload Log Output ==="
         if [ -f upload.log ]; then
           cat upload.log
+          echo "=== Master Archive Contents ==="
+          if [ -f Bots_V3_splunkapps.tar ]; then
+            tar -tvf Bots_V3_splunkapps.tar || echo "Could not list master archive contents"
+          else
+            echo "Master archive not found locally"
+          fi
         else
           echo "No upload.log found"
         fi
+        
+    - name: Cleanup
+      run: |
+        echo "=== Cleaning up ==="
+        rm -f upload.log Bots_V3_splunkapps.tar
