@@ -76,7 +76,7 @@ class DropboxUploader:
             return base[:-7] + ".tgz"
         return base
 
-def update_master_file(self, archive_file):
+    def update_master_file(self, archive_file):
         """
         Rebuild master tar so that any existing entry with the same name is replaced.
         If master doesn't exist, create new tar and add the archive (stored as .tgz arcname).
@@ -183,4 +183,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
