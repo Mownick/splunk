@@ -14,7 +14,7 @@ logging.basicConfig(
     filename='upload.log'
 )
 
-MASTER_NAME = "Bots_V3_splunkapps.tar"
+MASTER_NAME = "Bots_V3_splunkapps.tgz"  # Changed from .tar to .tgz for consistency
 MASTER_PATH = os.path.abspath(MASTER_NAME)
 
 class DropboxUploader:
@@ -76,11 +76,22 @@ class DropboxUploader:
             return base[:-7] + ".tgz"
         return base
 
+    def _convert_to_tgz_if_needed(self, archive_file):
+        """Convert .tar.gz to .tgz format if needed, returns path to final file"""
+        if archive_file.endswith(".tar.gz"):
+            new_name = archive_file[:-7] + ".tgz"
+            os.rename(archive_file, new_name)
+            logging.info(f"Renamed {archive_file} to {new_name}")
+            return new_name
+        return archive_file
+
     def update_master_file(self, archive_file):
         """
         Rebuild master tar so that any existing entry with the same name is replaced.
         If master doesn't exist, create new tar and add the archive (stored as .tgz arcname).
         """
+        # First convert the archive file to .tgz if needed
+        archive_file = self._convert_to_tgz_if_needed(archive_file)
         arcname = self._make_arcname(archive_file)
         logging.info(f"Desired arcname inside master: {arcname}")
 
