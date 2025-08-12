@@ -56,64 +56,68 @@ class DropboxUploader:
             logging.info("Downloaded master file from Dropbox.")
             return True
         except ApiError as e:
-            if e.error.is_path() and e.error.get_path().is_not_found():
-                logging.info("Master file not found on Dropbox; will create new one.")
-                return False
+            # check not_found
+            try:
+                if e.error.is_path() and e.error.get_path().is_not_found():
+                    logging.info("Master file not found on Dropbox; will create new one locally.")
+                    return False
+            except Exception:
+                pass
             logging.error(f"Failed to download master file: {e}")
             raise
         except Exception as e:
             logging.error(f"Unexpected error while downloading master file: {e}")
             raise
 
-    def _convert_to_tgz_name(self, filename):
-        """Convert .tar.gz filename to .tgz format."""
-        if filename.endswith(".tar.gz"):
-            return filename[:-7] + ".tgz"
-        return filename
+    def _make_arcname(self, archive_file):
+        """Return desired arcname inside master tar: convert .tar.gz -> .tgz"""
+        base = os.path.basename(archive_file)
+        if base.endswith(".tar.gz"):
+            return base[:-7] + ".tgz"
+        return base
 
-    def update_master_file(self, archive_file):
+def update_master_file(self, archive_file):
         """
-        Rebuild master tar ensuring all entries use .tgz extension.
-        If master doesn't exist, create new tar with the archive (as .tgz).
+        Rebuild master tar so that any existing entry with the same name is replaced.
+        If master doesn't exist, create new tar and add the archive (stored as .tgz arcname).
         """
-        # Determine the internal name (always use .tgz)
-        arcname = self._convert_to_tgz_name(os.path.basename(archive_file))
-        logging.info(f"Adding file to master as: {arcname}")
+        arcname = self._make_arcname(archive_file)
+        logging.info(f"Desired arcname inside master: {arcname}")
 
         if os.path.exists(MASTER_NAME):
-            # Rebuild master into a temp tar
+            # Rebuild master into a temp tar: copy all entries except ones matching arcname
             tmp_fd, tmp_path = tempfile.mkstemp(suffix=".tar")
             os.close(tmp_fd)
             try:
                 with tarfile.open(MASTER_NAME, 'r:') as old_tar, \
                      tarfile.open(tmp_path, 'w:') as new_tar:
-                    # Copy all existing entries except the one we're replacing
                     for member in old_tar.getmembers():
-                        if self._convert_to_tgz_name(member.name) == arcname:
+                        if member.name == arcname:
                             logging.info(f"Skipping existing entry {member.name} (will be replaced).")
                             continue
                         fobj = old_tar.extractfile(member)
                         if fobj is None:
+                            # directory or special file
                             new_tar.addfile(member)
                         else:
                             new_tar.addfile(member, fobj)
-                    # Add the new file with .tgz name
+                    # add the new archive file as a single file entry with arcname
                     new_tar.add(archive_file, arcname=arcname)
-                
-                # Replace original with rebuilt version
+                # replace original master with rebuilt one
                 os.replace(tmp_path, MASTER_NAME)
-                logging.info(f"Updated {MASTER_NAME} with {arcname}")
+                logging.info(f"Rebuilt {MASTER_NAME} and added {arcname}")
             except Exception:
+                # cleanup on error
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-                logging.exception("Failed to rebuild master tar")
+                logging.exception("Failed while rebuilding master tar")
                 raise
         else:
-            # Create new master tar
+            # Create new master and add the archive
             try:
                 with tarfile.open(MASTER_NAME, 'w:') as master_tar:
                     master_tar.add(archive_file, arcname=arcname)
-                logging.info(f"Created new {MASTER_NAME} with {arcname}")
+                logging.info(f"Created {MASTER_NAME} and added {arcname}")
             except Exception:
                 logging.exception("Failed to create master tar")
                 raise
@@ -134,20 +138,15 @@ class DropboxUploader:
                 if file_size <= CHUNK_SIZE:
                     self.dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
                 else:
+                    # start session
                     upload_session_start_result = self.dbx.files_upload_session_start(f.read(CHUNK_SIZE))
-                    cursor = dropbox.files.UploadSessionCursor(
-                        session_id=upload_session_start_result.session_id,
-                        offset=f.tell()
-                    )
-                    commit = dropbox.files.CommitInfo(
-                        path=dropbox_path,
-                        mode=dropbox.files.WriteMode.overwrite
-                    )
+                    cursor = dropbox.files.UploadSessionCursor(session_id=upload_session_start_result.session_id, offset=f.tell())
+                    commit = dropbox.files.CommitInfo(path=dropbox_path, mode=dropbox.files.WriteMode.overwrite)
 
                     while f.tell() < file_size:
                         bytes_left = file_size - f.tell()
                         if bytes_left <= CHUNK_SIZE:
-                            self.dbx.files_upload_session_finish(f.read(bytes_left), cursor, commit)
+                            self.dbx.files_upload_session_finish(f.read(CHUNK_SIZE), cursor, commit)
                         else:
                             self.dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
                             cursor.offset = f.tell()
@@ -169,14 +168,11 @@ def main():
         uploader = DropboxUploader(ACCESS_TOKEN)
 
         archive_file = uploader.find_latest_archive()
-        master_exists = uploader.download_master_file()
-        logging.info(f"Master file {'exists' if master_exists else 'does not exist'} on Dropbox")
-        
+        uploader.download_master_file()  # may return True/False, not used directly here
         uploader.update_master_file(archive_file)
         success = uploader.upload_file()
         if not success:
             raise RuntimeError("Upload failed")
-        
         logging.info("✅ Backup completed successfully")
         print("✅ Backup completed successfully")
         return 0
@@ -187,3 +183,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
